@@ -25,9 +25,15 @@ def main() -> int:
     import anthropic  # imported here so tests don't need the SDK configured
 
     client = anthropic.Anthropic()
+    budget = os.environ.get("DAILY_TOKEN_BUDGET", "").strip()
+    if budget and not budget.isdigit():
+        print("DAILY_TOKEN_BUDGET must be a whole number of tokens, or empty for no limit.", file=sys.stderr)
+        return 1
+
     config = AgentConfig(
         model=os.environ.get("ANTHROPIC_MODEL", AgentConfig.model),
         default_timezone=os.environ.get("DEFAULT_TIMEZONE", AgentConfig.default_timezone),
+        daily_token_budget=int(budget) if budget else None,
     )
     agent = Agent(client.messages, Memory(os.environ.get("MEMORY_PATH", "agent.db")), config)
     TelegramBot(token, agent, allow_list).poll_forever()

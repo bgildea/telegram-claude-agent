@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from .guardrails import check_input, redact
 from .memory import Memory
@@ -35,6 +38,10 @@ class AgentReply:
     stopped_early: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
+    over_budget: bool = False
+
+
+BUDGET_MESSAGE = "You've reached today's usage limit for this chat. It resets at midnight."
 
 
 @dataclass
@@ -43,6 +50,9 @@ class AgentConfig:
     max_tokens: int = 1024
     max_tool_rounds: int = 5
     default_timezone: str = "Asia/Bangkok"
+    # Input plus output tokens each chat may use per day, counted in default_timezone.
+    # None means no limit. Checked before each message, so one long turn can finish above it.
+    daily_token_budget: int | None = None
 
 
 class Agent:
@@ -52,16 +62,28 @@ class Agent:
         memory: Memory,
         config: AgentConfig | None = None,
         tools: list[Tool] | None = None,
+        clock: Callable[[ZoneInfo], datetime] | None = None,
     ) -> None:
         self.model = model
         self.memory = memory
         self.config = config or AgentConfig()
         self.tools = {t.name: t for t in (tools if tools is not None else DEFAULT_TOOLS)}
+        self._clock = clock or datetime.now
+
+    def today(self) -> str:
+        """Today's date in the configured timezone, as used for the token budget."""
+        return self._clock(ZoneInfo(self.config.default_timezone)).date().isoformat()
 
     def handle(self, chat_id: int, text: str) -> AgentReply:
         refusal = check_input(text)
         if refusal:
             return AgentReply(text=refusal)
+
+        day = self.today()
+        budget = self.config.daily_token_budget
+        if budget is not None and self.memory.tokens_used(chat_id, day) >= budget:
+            log.info("chat=%s over daily token budget (%s)", chat_id, budget)
+            return AgentReply(text=BUDGET_MESSAGE, over_budget=True)
 
         clean = redact(text)
         self.memory.add_message(chat_id, "user", clean)
@@ -79,8 +101,12 @@ class Agent:
             )
             usage = getattr(response, "usage", None)
             if usage is not None:
-                reply.input_tokens += getattr(usage, "input_tokens", 0) or 0
-                reply.output_tokens += getattr(usage, "output_tokens", 0) or 0
+                used_in = getattr(usage, "input_tokens", 0) or 0
+                used_out = getattr(usage, "output_tokens", 0) or 0
+                reply.input_tokens += used_in
+                reply.output_tokens += used_out
+                # Record per call, so tokens count even if a later round fails.
+                self.memory.add_usage(chat_id, day, used_in, used_out)
 
             blocks = list(response.content)
             if response.stop_reason != "tool_use":
