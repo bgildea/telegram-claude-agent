@@ -58,13 +58,13 @@ sequenceDiagram
 agent/
   core.py           agent loop, tool dispatch, round limit, token accounting
   tools.py          tool definitions and the safe calculator
-  memory.py         SQLite: recent history and saved notes, per chat
+  memory.py         SQLite: recent history, saved notes and daily token use, per chat
   guardrails.py     redaction, input limits, allow list
   telegram_bot.py   long polling, commands, message splitting
 evals/
   cases.json        eval cases: expected tools, required and forbidden text
   run_evals.py      runs cases against the live model
-tests/              32 unit tests against a scripted fake model
+tests/              38 unit tests against a scripted fake model
 ```
 
 ## Run it
@@ -85,6 +85,8 @@ python -m agent
 
 No public server or webhook needed; it uses long polling.
 
+To cap spend, set `DAILY_TOKEN_BUDGET` to the number of tokens (input plus output) each chat may use per day. The day is counted in `DEFAULT_TIMEZONE`. The check runs before each message, so a single long turn can finish a little over the limit; after that the bot replies that the limit is reached until midnight. Leave it empty for no limit.
+
 ## Tests and evals
 
 ```bash
@@ -93,7 +95,7 @@ ruff check .
 python -m evals.run_evals     # live, needs ANTHROPIC_API_KEY
 ```
 
-The unit tests cover the loop itself: tool results going back to the model, bad tool input handled gracefully, the round limit, redaction, per-chat isolation and token accounting.
+The unit tests cover the loop itself: tool results going back to the model, bad tool input handled gracefully, the round limit, redaction, per-chat isolation, token accounting and the daily token budget.
 
 The evals cover behaviour that only the real model can show:
 
@@ -112,7 +114,7 @@ Add a case every time a real conversation goes wrong.
 ## Roadmap
 
 - [ ] Model fallback when the primary API is unavailable
-- [ ] Per-chat daily token budget
+- [x] Per-chat daily token budget
 - [ ] Voice notes via transcription
 - [ ] Docker image
 

@@ -3,6 +3,8 @@
 Two kinds of memory:
 - conversation history: the last N turns, so the model has short-term context
 - notes: facts the user explicitly asked the assistant to remember
+
+It also keeps a daily token tally per chat, used for the optional budget.
 """
 
 from __future__ import annotations
@@ -39,6 +41,13 @@ class Memory:
                 chat_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
                 created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS token_usage (
+                chat_id INTEGER NOT NULL,
+                day TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (chat_id, day)
             );
             """
         )
@@ -95,3 +104,26 @@ class Memory:
         )
         self._db.commit()
         return cursor.rowcount > 0
+
+    # Token usage ----------------------------------------------------------
+
+    def add_usage(self, chat_id: int, day: str, input_tokens: int, output_tokens: int) -> None:
+        """Add tokens to a chat's tally for one day (an ISO date string, e.g. 2026-11-11)."""
+        self._db.execute(
+            """
+            INSERT INTO token_usage (chat_id, day, input_tokens, output_tokens) VALUES (?, ?, ?, ?)
+            ON CONFLICT (chat_id, day) DO UPDATE SET
+                input_tokens = input_tokens + excluded.input_tokens,
+                output_tokens = output_tokens + excluded.output_tokens
+            """,
+            (chat_id, day, input_tokens, output_tokens),
+        )
+        self._db.commit()
+
+    def tokens_used(self, chat_id: int, day: str) -> int:
+        """Input plus output tokens a chat has used on the given day."""
+        row = self._db.execute(
+            "SELECT input_tokens + output_tokens FROM token_usage WHERE chat_id = ? AND day = ?",
+            (chat_id, day),
+        ).fetchone()
+        return int(row[0]) if row else 0
